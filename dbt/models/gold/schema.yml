@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: trips_by_day
+    description: "Daily NYC Taxi trip statistics (Gold layer)"
+    columns:
+      - name: pickup_date
+        description: "Date of trip"
+        tests: [not_null, unique]
+      - name: total_trips
+        description: "Number of trips on that day"
+        tests: [not_null]
+
+  - name: trips_by_zone
+    description: "Pickup zone performance ranking (Gold layer)"
+    columns:
+      - name: pickup_zone_id
+        description: "TLC Taxi Zone ID"
+        tests: [not_null, unique]
+      - name: total_pickups
+        description: "Total trips starting in this zone"
+        tests: [not_null]

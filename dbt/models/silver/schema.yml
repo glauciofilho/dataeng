@@ -1,0 +1,15 @@
+version: 2
+
+models:
+  - name: stg_nyc_taxi
+    description: "Cleaned and enriched NYC Yellow Taxi trips (Silver layer)"
+    columns:
+      - name: pickup_datetime
+        description: "Trip start timestamp"
+        tests: [not_null]
+      - name: fare_amount
+        description: "Base fare in USD"
+        tests: [not_null]
+      - name: trip_distance
+        description: "Distance in miles"
+        tests: [not_null]

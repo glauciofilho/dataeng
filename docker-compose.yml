@@ -1,0 +1,232 @@
+version: "3.8"
+
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+    dockerfile: Dockerfile
+  env_file: .env
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+    AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+    # Pass infra vars into Airflow
+    MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+    MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+    MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    SPARK_MASTER_URL: ${SPARK_MASTER_URL}
+    ICEBERG_REST_URL: ${ICEBERG_REST_URL}
+    TRINO_HOST: ${TRINO_HOST}
+    TRINO_PORT: ${TRINO_PORT}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - airflow_logs:/opt/airflow/logs
+    - ./spark/jobs:/opt/spark/jobs   # jobs accessible from Airflow too
+    - ./dbt:/opt/airflow/dbt         # dbt project accessible by BashOperator
+  depends_on:
+    postgres:
+      condition: service_healthy
+  deploy:
+    resources:
+      limits:
+        memory: 1g
+
+services:
+
+  # ─── PostgreSQL ──────────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ─── MinIO ───────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    env_file: .env
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    env_file: .env
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./minio/create-buckets.sh:/create-buckets.sh
+    entrypoint: ["/bin/sh", "/create-buckets.sh"]
+
+  # ─── Iceberg REST Catalog ─────────────────────────────────────
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: iceberg-rest
+    ports:
+      - "8181:8181"
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3a://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ─── Airflow Init ─────────────────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create
+          --username admin
+          --firstname Admin
+          --lastname User
+          --role Admin
+          --email admin@example.com
+          --password admin
+      "
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ─── Airflow Webserver ───────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      retries: 5
+
+  # ─── Airflow Scheduler ───────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ─── Spark Master ────────────────────────────────────────────
+  spark-master:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: spark-master
+    env_file: .env
+    environment:
+      SPARK_MODE: master
+      SPARK_MASTER_HOST: spark-master
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      ICEBERG_REST_URL: ${ICEBERG_REST_URL}
+    ports:
+      - "8090:8080"
+      - "7077:7077"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  spark-worker:
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    container_name: spark-worker
+    env_file: .env
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 1G
+      SPARK_WORKER_CORES: 2
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      ICEBERG_REST_URL: ${ICEBERG_REST_URL}
+    ports:
+      - "8091:8081"
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark/jobs:/opt/spark/jobs
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+
+  # ─── Trino ───────────────────────────────────────────────────
+  trino:
+    image: trinodb/trino:446
+    container_name: trino
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./trino/etc:/etc/trino
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+    depends_on:
+      iceberg-rest:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  minio_data:
+  airflow_logs:
+
+networks:
+  default:
+    name: dataeng-network
