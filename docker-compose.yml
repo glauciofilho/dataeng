@@ -9,13 +9,14 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
     AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
     # Pass infra vars into Airflow
-    MINIO_ENDPOINT: ${MINIO_ENDPOINT}
-    MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-    MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    S3_ENDPOINT: ${S3_ENDPOINT}
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+    S3_SECRET_KEY: ${S3_SECRET_KEY}
+    S3_REGION: ${S3_REGION:-us-east-1}
     SPARK_MASTER_URL: ${SPARK_MASTER_URL}
     ICEBERG_REST_URL: ${ICEBERG_REST_URL}
     TRINO_HOST: ${TRINO_HOST}
@@ -25,68 +26,12 @@ x-airflow-common: &airflow-common
     - airflow_logs:/opt/airflow/logs
     - ./spark/jobs:/opt/spark/jobs   # jobs accessible from Airflow too
     - ./dbt:/opt/airflow/dbt         # dbt project accessible by BashOperator
-  depends_on:
-    postgres:
-      condition: service_healthy
   deploy:
     resources:
       limits:
         memory: 1g
 
 services:
-
-  # ─── PostgreSQL ──────────────────────────────────────────────
-  postgres:
-    image: postgres:15
-    container_name: postgres
-    env_file: .env
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
-      interval: 10s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-
-  # ─── MinIO ───────────────────────────────────────────────────
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    env_file: .env
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-
-  minio-init:
-    image: minio/mc:latest
-    container_name: minio-init
-    env_file: .env
-    depends_on:
-      minio:
-        condition: service_healthy
-    volumes:
-      - ./minio/create-buckets.sh:/create-buckets.sh
-    entrypoint: ["/bin/sh", "/create-buckets.sh"]
 
   # ─── Iceberg REST Catalog ─────────────────────────────────────
   iceberg-rest:
@@ -95,16 +40,13 @@ services:
     ports:
       - "8181:8181"
     environment:
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
-      AWS_REGION: us-east-1
-      CATALOG_WAREHOUSE: s3a://warehouse/
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_REGION: ${S3_REGION:-us-east-1}
+      CATALOG_WAREHOUSE: ${S3_WAREHOUSE_PATH:-s3a://warehouse/}
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      CATALOG_S3_ENDPOINT: http://minio:9000
-      CATALOG_S3_PATH__STYLE__ACCESS: "true"
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
+      CATALOG_S3_ENDPOINT: ${S3_ENDPOINT}
+      CATALOG_S3_PATH__STYLE__ACCESS: ${S3_PATH_STYLE_ACCESS:-true}
     deploy:
       resources:
         limits:
@@ -168,9 +110,10 @@ services:
     environment:
       SPARK_MODE: master
       SPARK_MASTER_HOST: spark-master
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_REGION: ${S3_REGION:-us-east-1}
       ICEBERG_REST_URL: ${ICEBERG_REST_URL}
     ports:
       - "8090:8080"
@@ -191,9 +134,10 @@ services:
       SPARK_MASTER_URL: spark://spark-master:7077
       SPARK_WORKER_MEMORY: 1G
       SPARK_WORKER_CORES: 2
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_REGION: ${S3_REGION:-us-east-1}
       ICEBERG_REST_URL: ${ICEBERG_REST_URL}
     ports:
       - "8091:8081"
@@ -210,6 +154,7 @@ services:
   trino:
     image: trinodb/trino:446
     container_name: trino
+    env_file: .env
     ports:
       - "8083:8080"
     volumes:
@@ -223,8 +168,6 @@ services:
         condition: service_started
 
 volumes:
-  postgres_data:
-  minio_data:
   airflow_logs:
 
 networks:

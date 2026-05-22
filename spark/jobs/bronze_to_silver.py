@@ -7,19 +7,23 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType, IntegerType
 
-MINIO_ENDPOINT   = "http://minio:9000"
-MINIO_ACCESS_KEY = "minioadmin"
-MINIO_SECRET_KEY = "minioadmin"
-ICEBERG_REST_URL = "http://iceberg-rest:8181"
+import os
+
+S3_ENDPOINT   = os.getenv("S3_ENDPOINT", "http://127.0.0.1:8333")
+S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "your_access_key")
+S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "your_secret_key")
+S3_WAREHOUSE  = os.getenv("S3_WAREHOUSE_PATH", "s3a://warehouse/")
+S3_PATH_STYLE_ACCESS = os.getenv("S3_PATH_STYLE_ACCESS", "true")
+ICEBERG_REST_URL = os.getenv("ICEBERG_REST_URL", "http://iceberg-rest:8181")
 
 spark = (
     SparkSession.builder
     .appName("bronze_to_silver")
-    # ── S3A / MinIO ─────────────────────────────────────────────
-    .config("spark.hadoop.fs.s3a.endpoint",                 MINIO_ENDPOINT)
-    .config("spark.hadoop.fs.s3a.access.key",               MINIO_ACCESS_KEY)
-    .config("spark.hadoop.fs.s3a.secret.key",               MINIO_SECRET_KEY)
-    .config("spark.hadoop.fs.s3a.path.style.access",        "true")
+    # ── S3A / SeaweedFS S3 ───────────────────────────────────────
+    .config("spark.hadoop.fs.s3a.endpoint",                 S3_ENDPOINT)
+    .config("spark.hadoop.fs.s3a.access.key",               S3_ACCESS_KEY)
+    .config("spark.hadoop.fs.s3a.secret.key",               S3_SECRET_KEY)
+    .config("spark.hadoop.fs.s3a.path.style.access",        S3_PATH_STYLE_ACCESS)
     .config("spark.hadoop.fs.s3a.impl",                     "org.apache.hadoop.fs.s3a.S3AFileSystem")
     .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
     # ── Iceberg extensions ───────────────────────────────────────
@@ -28,10 +32,10 @@ spark = (
     .config("spark.sql.catalog.iceberg",                    "org.apache.iceberg.spark.SparkCatalog")
     .config("spark.sql.catalog.iceberg.type",               "rest")
     .config("spark.sql.catalog.iceberg.uri",                ICEBERG_REST_URL)
-    .config("spark.sql.catalog.iceberg.warehouse",          "s3a://warehouse/")
+    .config("spark.sql.catalog.iceberg.warehouse",          S3_WAREHOUSE)
     .config("spark.sql.catalog.iceberg.io-impl",            "org.apache.iceberg.aws.s3.S3FileIO")
-    .config("spark.sql.catalog.iceberg.s3.endpoint",        MINIO_ENDPOINT)
-    .config("spark.sql.catalog.iceberg.s3.path-style-access", "true")
+    .config("spark.sql.catalog.iceberg.s3.endpoint",        S3_ENDPOINT)
+    .config("spark.sql.catalog.iceberg.s3.path-style-access", S3_PATH_STYLE_ACCESS)
     .getOrCreate()
 )
 

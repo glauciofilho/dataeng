@@ -8,7 +8,7 @@ Stack moderna de engenharia de dados rodando 100% em Docker, com arquitetura **M
 |---|---|---|
 | **Apache Airflow** | Orquestração de pipelines | http://localhost:8080 |
 | **Apache Spark** | Processamento distribuído (PySpark) | http://localhost:8090 |
-| **MinIO** | Object Storage S3-compatível | http://localhost:9001 |
+| **SeaweedFS** | Object Storage S3-compatível (Produção) | — |
 | **Apache Iceberg** | Formato de tabela ACID open table format | — |
 | **Iceberg REST Catalog** | Catálogo de metadados leve | http://localhost:8181 |
 | **dbt (dbt-trino)** | Transformações SQL declarativas | — |
@@ -19,12 +19,12 @@ Stack moderna de engenharia de dados rodando 100% em Docker, com arquitetura **M
 ```
 [Airflow Orchestrator]
        │
-       ├─► DAG 1: Ingestion ──────► MinIO bronze/  (raw parquet)
+       ├─► DAG 1: Ingestion ──────► SeaweedFS bronze/  (raw parquet)
        │                                  │
        ├─► DAG 2: Spark Processing ───────┤
        │         bronze → silver          │  Iceberg Tables
        │         silver → gold            ▼
-       │                           MinIO warehouse/
+       │                           SeaweedFS warehouse/
        │                           ┌─ silver.nyc_taxi   (Iceberg)
        │                           └─ gold.trips_by_day (Iceberg)
        │                              gold.trips_by_zone(Iceberg)
@@ -67,16 +67,16 @@ make trigger-pipeline
 | Serviço | URL / Porta | Credenciais |
 |---|---|---|
 | Airflow UI | http://localhost:8080 | admin / admin |
-| MinIO Console | http://localhost:9001 | minioadmin / minioadmin |
 | Spark Master UI | http://localhost:8090 | — |
 | Trino UI | http://localhost:8083 | — |
 | Iceberg REST | http://localhost:8181 | — |
-| PostgreSQL | localhost:5432 | dataeng / dataeng123 |
+| PostgreSQL (Prod) | Configurado em `.env` | Externo |
+| SeaweedFS S3 (Prod) | Configurado em `.env` | Externo |
 
 ## Pipeline de Dados
 
 ### DAG 01 — Ingestion
-Baixa o dataset **NYC Yellow Taxi Jan/2023** (~45 MB parquet) do site público da TLC e faz upload para o bucket `bronze/` no MinIO.
+Baixa o dataset **NYC Yellow Taxi Jan/2023** (~45 MB parquet) do site público da TLC e faz upload para o bucket `bronze/` no SeaweedFS.
 
 - Idempotente: pula se o arquivo já existir
 - Fonte: `d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.parquet`
@@ -198,9 +198,9 @@ make dbt-docs              # Gera e serve dbt docs em :8088
 make log svc=airflow-init
 ```
 
-**Spark job falha com S3 error:**
-- Verifique se o MinIO está healthy: `make log svc=minio`
-- Confirme que os buckets foram criados: `make log svc=minio-init`
+**Spark job falha com S3/SeaweedFS error:**
+- Verifique se as credenciais e o endpoint de produção do SeaweedFS S3 no arquivo `.env` estão corretos.
+- Verifique se os buckets `bronze`, `silver`, `gold` e `warehouse` existem no seu servidor SeaweedFS de produção.
 
 **Trino não conecta no Iceberg catalog:**
 ```bash

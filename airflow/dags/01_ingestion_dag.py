@@ -17,9 +17,9 @@ from airflow.operators.python import PythonOperator
 
 log = logging.getLogger(__name__)
 
-MINIO_ENDPOINT     = os.environ["MINIO_ENDPOINT"]
-MINIO_ACCESS_KEY   = os.environ["MINIO_ROOT_USER"]
-MINIO_SECRET_KEY   = os.environ["MINIO_ROOT_PASSWORD"]
+S3_ENDPOINT     = os.environ.get("S3_ENDPOINT", "http://127.0.0.1:8333")
+S3_ACCESS_KEY   = os.environ.get("S3_ACCESS_KEY", "your_access_key")
+S3_SECRET_KEY   = os.environ.get("S3_SECRET_KEY", "your_secret_key")
 BRONZE_BUCKET      = "bronze"
 
 # Public NYC Taxi data — Jan 2023 (~45 MB parquet)
@@ -33,11 +33,11 @@ DEST_KEY = "nyc_taxi/yellow_tripdata_2023-01.parquet"
 def _s3_client():
     return boto3.client(
         "s3",
-        endpoint_url=MINIO_ENDPOINT,
-        aws_access_key_id=MINIO_ACCESS_KEY,
-        aws_secret_access_key=MINIO_SECRET_KEY,
+        endpoint_url=S3_ENDPOINT,
+        aws_access_key_id=S3_ACCESS_KEY,
+        aws_secret_access_key=S3_SECRET_KEY,
         config=Config(signature_version="s3v4"),
-        region_name="us-east-1",
+        region_name=os.environ.get("S3_REGION", "us-east-1"),
     )
 
 
